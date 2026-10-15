@@ -1,0 +1,50 @@
+name: Relay sender
+
+# This PUBLIC repo holds no data and no code. Each run checks out the PRIVATE repo
+# tss8117/cold-mail with a token limited to that repo, sends whatever is due (logs show counts
+# only), and just before GitHub's 6-hour job limit starts the next run itself, so sending never
+# depends on GitHub's unreliable scheduler. The schedule below only restarts the chain if it breaks.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 */3 * * *"
+
+concurrency:
+  group: relay
+  cancel-in-progress: false
+
+permissions:
+  actions: write   # to start the next relay run
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: tss8117/cold-mail
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Send what is due (counts-only logs)
+        env:
+          COLDMAIL_QUIET: "1"
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          FROM_ADDR: ${{ vars.FROM_ADDR }}
+          DAILY_CAP: ${{ vars.DAILY_CAP }}
+        run: |
+          git config user.name "coldmail-relay"
+          git config user.email "coldmail-relay@users.noreply.github.com"
+          python -m coldmail.relay --minutes 340
+      - name: Start the next relay run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run relay.yml --repo "${{ github.repository }}"
